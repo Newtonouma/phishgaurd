@@ -1,6 +1,6 @@
 /* popup.js — PhishGuard Extension Popup Logic */
 
-const API = "http://localhost:5000";
+const API = "https://phishgaurd-production-1c76.up.railway.app";
 
 // Check API status
 async function checkAPI() {

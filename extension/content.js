@@ -12,7 +12,7 @@
 "use strict";
 
 // ── Configuration ─────────────────────────────────────────
-const API_BASE = "http://localhost:5000";   // local Python Flask API
+const API_BASE = "https://phishgaurd-production-1c76.up.railway.app";
 const DEBOUNCE_MS = 800;
 
 // ── State ─────────────────────────────────────────────────
@@ -197,7 +197,7 @@ function showPanel(options) {
           : "Analysis complete."
       }</div>
       <div class="pg-actions">
-        <button class="pg-btn pg-btn-primary" onclick="window.open('http://localhost:5000/dashboard','_blank')">
+        <button class="pg-btn pg-btn-primary" onclick="window.open('https://phishgaurd-production-1c76.up.railway.app/dashboard','_blank')">
           📊 Full Dashboard
         </button>
         <button class="pg-btn pg-btn-secondary" onclick="this.closest('#phishguard-panel').remove()">
