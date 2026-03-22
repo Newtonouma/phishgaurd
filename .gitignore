@@ -1,0 +1,20 @@
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Local environment
+.venv/
+
+# Build artifacts
+build/
+dist/
+*.spec
+*.exe
+*.zip
+
+# Large runtime/model data (keep local, do not commit)
+phishguard_dataset.csv
+phishguard_model.joblib
+
+# Optional generated caches inside deploy folder
+railway_api/__pycache__/
