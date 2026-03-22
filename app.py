@@ -239,6 +239,7 @@ class PhishGuardApp(tk.Tk):
         self.detector    = PhishingDetector(max_features=10000)
         self.loader      = PhishingDataLoader()
         self._df         = None
+        self._has_uploaded_data = False
         self._trained    = False
         self._chat_hist  = []     # [(role, text), ...]
         self._cur_page   = "dashboard"
@@ -250,7 +251,7 @@ class PhishGuardApp(tk.Tk):
                        "weekly": [4, 7, 2, 9, 3, 6, 8]}
 
         self._build_layout()
-        self._load_demo_data()
+        self._set_startup_upload_required_state()
 
     # ══════════════════════════════════════════════════════
     #  TOP-LEVEL LAYOUT
@@ -748,8 +749,8 @@ class PhishGuardApp(tk.Tk):
             messagebox.showinfo("Empty", "Paste an email to analyse."); return
         if not self._trained:
             messagebox.showinfo("Not Trained",
-                "Models are still training on demo data.\n"
-                "Please wait a moment then try again."); return
+                "No trained model is available yet.\n"
+                "Load datasets and train models first, or use Demo Fallback."); return
 
         sel = self._analyse_model_var.get()
         model_name = None if sel == "Best Model" else sel
@@ -1008,6 +1009,8 @@ class PhishGuardApp(tk.Tk):
         tk.Label(crow, text="Model Performance", bg=C["white"],
                  fg=C["txt_dark"], font=(FF, 11, "bold")).pack(side="left")
         make_btn(crow, "🚀  Train All Models", self._run_training, C["orange"]).pack(side="right")
+        make_btn(crow, "🧪  Use Demo Fallback", self._train_demo_fallback, C["amber"]
+                 ).pack(side="right", padx=(0, 8))
         make_btn(crow, "📂  Load Datasets First",
                  lambda: self._navigate("datasets"), C["blue"]
                  ).pack(side="right", padx=(0, 8))
@@ -1037,9 +1040,13 @@ class PhishGuardApp(tk.Tk):
                  bg=C["bg"], fg=C["txt_light"], font=(FF, 12)).pack(pady=40)
 
     def _run_training(self):
-        if self._df is None:
-            messagebox.showinfo("No Data",
-                "Load dataset files in the Datasets tab first."); return
+        if not self._has_uploaded_data or self._df is None:
+            messagebox.showinfo(
+                "Upload Required",
+                "On first startup, upload datasets first and then train.\n"
+                "Use 'Demo Fallback' only when you need a temporary model."
+            )
+            return
 
         def worker():
             self.after(0, self._train_pb.start)
@@ -1055,6 +1062,16 @@ class PhishGuardApp(tk.Tk):
                 self.after(0, self._train_pb.stop)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _train_demo_fallback(self):
+        msg = (
+            "This will train on the built-in demo emails.\n\n"
+            "Use this only as a temporary fallback. Production training should use uploaded datasets.\n\n"
+            "Continue?"
+        )
+        if not messagebox.askyesno("Use Demo Fallback", msg):
+            return
+        self._load_demo_data(as_fallback=True)
 
     def _on_trained(self):
         for w in self._metrics_inner.winfo_children(): w.destroy()
@@ -1327,15 +1344,19 @@ class PhishGuardApp(tk.Tk):
     def _do_load(self, paths: list):
         def worker():
             self._status_var.set("Loading datasets…")
+            loaded_ok = False
             try:
                 loader = PhishingDataLoader()
                 df     = loader.load_files(paths)
                 self._df = df
+                self._has_uploaded_data = True
+                loaded_ok = True
                 self.after(0, lambda: self._update_ds_info(df, loader))
             except Exception as e:
                 self.after(0, lambda: messagebox.showerror("Load Error", str(e)))
             finally:
-                self.after(0, lambda: self._status_var.set("Ready"))
+                if not loaded_ok:
+                    self.after(0, lambda: self._status_var.set("Ready"))
         threading.Thread(target=worker, daemon=True).start()
 
     def _update_ds_info(self, df, loader):
@@ -1402,10 +1423,17 @@ class PhishGuardApp(tk.Tk):
                  ).pack(anchor="w",padx=16,pady=(0,16))
 
     # ══════════════════════════════════════════════════════
-    #  DEMO DATA AUTO-TRAIN
+    #  STARTUP + DEMO FALLBACK
     # ══════════════════════════════════════════════════════
 
-    def _load_demo_data(self):
+    def _set_startup_upload_required_state(self):
+        self._badge_var.set("⚠ Upload Data")
+        self._badge.configure(bg=C["amber"])
+        self._status_var.set("Upload datasets first, then train models.")
+        if hasattr(self, "_train_prog_var"):
+            self._train_prog_var.set("Startup requires uploaded datasets before training.")
+
+    def _load_demo_data(self, as_fallback: bool = False):
         def worker():
             time.sleep(0.3)
             legit = [
@@ -1443,11 +1471,20 @@ class PhishGuardApp(tk.Tk):
             emails, labels = zip(*combined)
             df = pd.DataFrame({"text":list(emails),"label":list(labels),"source":"demo"})
             df = df.sample(frac=1,random_state=42).reset_index(drop=True)
-            self._df = df
+            if self._df is None:
+                self._df = df
             self.detector.fit(df, test_size=0.2, cv_folds=3)
             self._trained = True
             self.after(0, self._on_trained)
-            self.after(0, lambda: self._status_var.set("Demo data trained. Ready."))
+            if as_fallback:
+                self.after(0, lambda: self._badge_var.set("⚠ Demo Fallback"))
+                self.after(0, lambda: self._badge.configure(bg=C["amber"]))
+                self.after(0, lambda: self._train_prog_var.set(
+                    "⚠ Demo fallback active. Upload datasets for production training."))
+                self.after(0, lambda: self._status_var.set(
+                    "Demo fallback trained. Upload datasets for full training."))
+            else:
+                self.after(0, lambda: self._status_var.set("Demo data trained. Ready."))
 
         threading.Thread(target=worker, daemon=True).start()
 

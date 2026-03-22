@@ -20,6 +20,14 @@ let currentEmailId   = null;
 let analysisPanel    = null;
 let debounceTimer    = null;
 
+function hasExtensionContext() {
+  try {
+    return Boolean(chrome?.runtime?.id);
+  } catch (_) {
+    return false;
+  }
+}
+
 // ── Inject PhishGuard button into Gmail toolbar ───────────
 function injectButton() {
   if (document.getElementById("phishguard-btn")) return;
@@ -232,7 +240,11 @@ function showPanel(options) {
   const dashboardBtn = panel.querySelector('[data-action="open-dashboard"]');
   if (dashboardBtn) {
     dashboardBtn.addEventListener("click", () => {
-      window.open(`${API_BASE}/dashboard`, "_blank", "noopener");
+      if (hasExtensionContext()) {
+        chrome.runtime.sendMessage({ action: "openDashboard", url: `${API_BASE}/dashboard` });
+      } else {
+        window.open(`${API_BASE}/dashboard`, "_blank", "noopener");
+      }
     });
   }
 
@@ -249,6 +261,8 @@ function showPanel(options) {
 const observer = new MutationObserver(() => {
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
+    if (!hasExtensionContext()) return;
+
     injectButton();
     // Auto-analyse when a new email is opened
     const emailBody = document.querySelector(".a3s.aiL");
@@ -257,9 +271,14 @@ const observer = new MutationObserver(() => {
       if (emailId && emailId !== currentEmailId) {
         currentEmailId = emailId;
         // Auto-analyse on email open (user can disable in settings)
-        chrome.storage.sync.get(["autoAnalyse"], (s) => {
-          if (s.autoAnalyse !== false) analyseCurrentEmail();
-        });
+        try {
+          chrome.storage.sync.get(["autoAnalyse"], (s) => {
+            if (chrome.runtime.lastError) return;
+            if (s.autoAnalyse !== false) analyseCurrentEmail();
+          });
+        } catch (_) {
+          // Ignore when extension is reloaded and old content script context is invalid.
+        }
       }
     }
   }, DEBOUNCE_MS);
@@ -270,6 +289,11 @@ injectButton();
 
 // ── Listen for messages from popup ───────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!hasExtensionContext()) {
+    sendResponse({ status: "context-invalid" });
+    return false;
+  }
+
   if (msg.action === "analyse") {
     analyseCurrentEmail();
     sendResponse({ status: "analysing" });

@@ -19,7 +19,9 @@ Place these files in this same folder before deploying:
 - or phishguard_model.pkl (fallback)
 - model_results.json (optional metadata)
 
-Without model files, the API auto-trains demo data on startup.
+Without model files, the API starts in `awaiting_upload` mode and requires
+uploaded labelled emails via `POST /train`.
+Demo data remains available only as an explicit fallback via `POST /train/fallback`.
 
 Railway steps
 -------------
@@ -29,8 +31,19 @@ Railway steps
 4. Deploy.
 5. Verify:
    - GET /health
+   - POST /data/upload (multipart with one or more files as `files`)
+   - GET /data/status
+   - POST /train
    - POST /predict
    - GET /dashboard
+
+Dashboard data loading workflow
+-------------------------------
+1. Open `/dashboard`.
+2. Upload one or more dataset files.
+3. Click **Train Uploaded Data**.
+4. Run a quick prediction to confirm end-to-end behavior.
+5. Use **Train Demo Fallback** only when no dataset is available.
 
 Notes
 -----

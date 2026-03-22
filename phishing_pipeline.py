@@ -167,6 +167,7 @@ class PhishingDataLoader:
     def __init__(self):
         self.df          = None
         self.load_report = []
+        self.file_stats  = []
 
     def load_files(self, paths: list) -> pd.DataFrame:
         frames = []
@@ -179,6 +180,11 @@ class PhishingDataLoader:
                 normed = self._normalise(raw, fname)
                 nf = int((normed["label"] == LABEL_PHISH).sum())
                 n  = len(normed)
+                self.file_stats.append({
+                    "file": os.path.basename(path),
+                    "rows": n,
+                    "phishing": nf,
+                })
                 self.load_report.append(
                     f"OK  {os.path.basename(path):<45} {n:>7,} rows  phishing={nf:>6,}")
                 frames.append(normed)

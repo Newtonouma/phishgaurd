@@ -1,5 +1,5 @@
-"""
-api_server.py  —  PhishGuard Flask API
+﻿"""
+api_server.py  â€”  PhishGuard Flask API
 ========================================
 Bridges the Gmail browser extension and the ML pipeline.
 Serves predictions and explanations as JSON.
@@ -7,31 +7,37 @@ Serves predictions and explanations as JSON.
 Startup priority:
   1. Load  phishguard_model.joblib  (saved by api /model/save or notebook full export)
   2. Load  phishguard_model.pkl     (exported from Colab Cell-18 / Cell-19)
-  3. Fall back to demo auto-training (no real datasets required)
+  3. Wait for uploaded training data via /train
+     (demo fallback remains available via /train/fallback)
 
 Run:
     pip install flask flask-cors joblib
     python api_server.py
 
 Endpoints:
-    GET  /health              — status + trained flag + loaded models
-    POST /predict             — classify email (includes Decision Tree path)
-    POST /explain/shap        — SHAP explanation
-    POST /explain/lime        — LIME explanation
-    POST /explain/tree        — Decision Tree exact path (NEW)
-    GET  /explain/tree/global — Top-level Decision Tree rules (NEW)
-    GET  /metrics             — model performance metrics
-    GET  /feature_importance  — top features from best model
-    POST /train               — re-train with supplied data
-    POST /model/save          — persist current model to disk
-    GET  /dashboard           — HTML stub (full app = python app.py)
+    GET  /health              â€” status + trained flag + loaded models
+    GET  /data/status         â€” uploaded dataset status
+    POST /data/upload         â€” upload CSV/XLSX/JSON/TXT/EML dataset files
+    POST /data/clear          â€” clear uploaded dataset from memory
+    POST /predict             â€” classify email (includes Decision Tree path)
+    POST /explain/shap        â€” SHAP explanation
+    POST /explain/lime        â€” LIME explanation
+    POST /explain/tree        â€” Decision Tree exact path (NEW)
+    GET  /explain/tree/global â€” Top-level Decision Tree rules (NEW)
+    GET  /metrics             â€” model performance metrics
+    GET  /feature_importance  â€” top features from best model
+    POST /train               â€” re-train with supplied data
+    POST /train/fallback      â€” explicit demo fallback training
+    POST /model/save          â€” persist current model to disk
+    GET  /dashboard           â€” HTML stub (full app = python app.py)
 
 UWS MSc IT with Data Analytics | B01821745
 """
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import os, sys, threading, logging
+from werkzeug.utils import secure_filename
+import os, sys, threading, logging, tempfile
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -42,22 +48,30 @@ from phishing_pipeline import (PhishingDetector, PhishingDataLoader,
 app = Flask(__name__)
 CORS(app)   # Allow extension to call from mail.google.com
 
-# ── Global state ──────────────────────────────────────────
+# â”€â”€ Global state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 detector = PhishingDetector(max_features=10000)
 _trained      = False
-_model_source = "none"       # "joblib" | "colab_pkl" | "demo"
+_model_source = "awaiting_upload"  # "joblib" | "colab_pkl" | "dataset_upload" | "api_upload" | "demo_fallback" | "awaiting_upload"
+_uploaded_df  = None
+_upload_info  = {
+    "loaded": False,
+    "rows": 0,
+    "phishing": 0,
+    "legitimate": 0,
+    "files": [],
+}
 
 
-# ── Startup: load or train ────────────────────────────────
+# â”€â”€ Startup: load or train â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _startup():
     """
     Called once in a background thread.
-    Priority: joblib save → Colab pkl export → demo training.
+    Priority: joblib save â†’ Colab pkl export â†’ wait for uploaded training data.
     """
     global _trained, _model_source, detector
 
-    # 1 ── Try full joblib save (all 5 models) ───────────────
+    # 1 â”€â”€ Try full joblib save (all 5 models) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if os.path.exists(MODEL_PATH_JOBLIB):
         try:
             logging.info(f"Loading pre-trained model: {MODEL_PATH_JOBLIB}")
@@ -69,7 +83,7 @@ def _startup():
         except Exception as e:
             logging.warning(f"joblib load failed: {e}")
 
-    # 2 ── Try Colab pickle export (best model only) ─────────
+    # 2 â”€â”€ Try Colab pickle export (best model only) â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if os.path.exists(MODEL_PATH_PKL):
         results_json = MODEL_PATH_PKL.replace(".pkl", "_results.json")
         try:
@@ -84,15 +98,20 @@ def _startup():
         except Exception as e:
             logging.warning(f"Colab pkl load failed: {e}")
 
-    # 3 ── Fall back: demo training ───────────────────────────
-    _demo_train()
+    # 3 â”€â”€ No model files: require uploaded training data â”€â”€â”€â”€â”€
+    _trained = False
+    _model_source = "awaiting_upload"
+    logging.warning(
+        "No model file found. Upload labelled emails to /train before predictions. "
+        "Use /train/fallback only as a temporary demo fallback."
+    )
 
 
 def _demo_train():
-    """Train on built-in demo data (no external datasets needed)."""
+    """Train on built-in demo data as an explicit fallback."""
     global _trained, _model_source
     import pandas as pd, random
-    logging.info("Auto-training on demo data…")
+    logging.info("Training on demo fallback dataâ€¦")
 
     legit = [
         "Dear team, please find attached the Q3 financial report for review.",
@@ -110,7 +129,7 @@ def _demo_train():
     ] * 20
     phish = [
         "URGENT: Your account has been SUSPENDED! Click here IMMEDIATELY to verify.",
-        "Congratulations! You WON £5000! Claim NOW before expiry.",
+        "Congratulations! You WON Â£5000! Claim NOW before expiry.",
         "Your password EXPIRES TODAY. Reset immediately or lose access.",
         "SECURITY ALERT: Unusual login on your account! Verify NOW.",
         "Your PayPal account is LIMITED. Click here to restore access.",
@@ -132,22 +151,57 @@ def _demo_train():
     df = pd.DataFrame({"text": list(texts), "label": list(labels), "source": "demo"})
     detector.fit(df, test_size=0.2, cv_folds=3)
     _trained      = True
-    _model_source = "demo"
-    logging.info(f"Demo training complete  |  best={detector.best_model()}")
+    _model_source = "demo_fallback"
+    logging.info(f"Demo fallback training complete  |  best={detector.best_model()}")
 
 
 threading.Thread(target=_startup, daemon=True).start()
 
 
-# ── Helper ────────────────────────────────────────────────
+# â”€â”€ Helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _require_trained():
     if not _trained:
-        return jsonify({"error": "Models not yet trained. Retry in a few seconds."}), 503
+        return jsonify({
+            "error": (
+                "Models are not trained yet. Upload labelled emails to POST /train. "
+                "Preferred flow: POST /data/upload then POST /train. "
+                "Optional fallback: POST /train/fallback."
+            )
+        }), 503
     return None
 
 
-# ── Routes ────────────────────────────────────────────────
+ALLOWED_UPLOAD_EXTS = {".csv", ".xlsx", ".xls", ".json", ".txt", ".eml"}
+
+
+def _set_uploaded_dataset(df, file_names):
+    global _uploaded_df, _upload_info
+    _uploaded_df = df.copy()
+    n = len(df)
+    phish = int((df["label"] == 1).sum()) if "label" in df.columns else 0
+    _upload_info = {
+        "loaded": True,
+        "rows": n,
+        "phishing": phish,
+        "legitimate": max(0, n - phish),
+        "files": list(file_names),
+    }
+
+
+def _clear_uploaded_dataset():
+    global _uploaded_df, _upload_info
+    _uploaded_df = None
+    _upload_info = {
+        "loaded": False,
+        "rows": 0,
+        "phishing": 0,
+        "legitimate": 0,
+        "files": [],
+    }
+
+
+# â”€â”€ Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.route("/health")
 def health():
@@ -157,8 +211,76 @@ def health():
         "model_source": _model_source,
         "best_model":   detector.best_model() if _trained else None,
         "models":       list(detector.trained.keys()) if _trained else [],
+        "dataset_loaded": _upload_info["loaded"],
+        "dataset_rows": _upload_info["rows"],
         "banner_id":    "B01821745",
     })
+
+
+@app.route("/data/status")
+def data_status():
+    return jsonify(_upload_info)
+
+
+@app.route("/data/upload", methods=["POST"])
+def data_upload():
+    """
+    Upload one or more dataset files and keep merged data in memory.
+    Accepted extensions: CSV, XLSX, XLS, JSON, TXT, EML.
+    """
+    files = request.files.getlist("files")
+    if not files:
+        one = request.files.get("file")
+        if one:
+            files = [one]
+    if not files:
+        return jsonify({"error": "No files uploaded. Use multipart/form-data with 'files'."}), 400
+
+    loader = PhishingDataLoader()
+    tmp_paths = []
+    kept_names = []
+    try:
+        for f in files:
+            if not f or not f.filename:
+                continue
+            name = secure_filename(f.filename)
+            ext = os.path.splitext(name)[1].lower()
+            if ext not in ALLOWED_UPLOAD_EXTS:
+                return jsonify({
+                    "error": f"Unsupported file type for {name}. "
+                             f"Allowed: {', '.join(sorted(ALLOWED_UPLOAD_EXTS))}"
+                }), 400
+
+            t = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+            f.save(t.name)
+            t.close()
+            tmp_paths.append(t.name)
+            kept_names.append(name)
+
+        if not tmp_paths:
+            return jsonify({"error": "No valid files uploaded."}), 400
+
+        df = loader.load_files(tmp_paths)
+        _set_uploaded_dataset(df, kept_names)
+        return jsonify({
+            "status": "uploaded",
+            "dataset": _upload_info,
+            "load_report": loader.load_report,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    finally:
+        for p in tmp_paths:
+            try:
+                os.unlink(p)
+            except Exception:
+                pass
+
+
+@app.route("/data/clear", methods=["POST"])
+def data_clear():
+    _clear_uploaded_dataset()
+    return jsonify({"status": "cleared", "dataset": _upload_info})
 
 
 @app.route("/predict", methods=["POST"])
@@ -235,7 +357,7 @@ def explain_tree():
     """
     Decision Tree exact path explanation.
     Returns every rule checked on the path from root to leaf.
-    This is the most transparent XAI method — no approximation.
+    This is the most transparent XAI method â€” no approximation.
 
     Body: { "text": "...", "top_n": 20 }
     """
@@ -307,17 +429,52 @@ def feature_importance():
 
 @app.route("/train", methods=["POST"])
 def train():
-    """Re-train with data from the request body."""
+    """Train with uploaded dataset (preferred) or JSON emails from request body."""
     global _trained, _model_source
-    data = request.get_json()
-    if not data or "emails" not in data:
-        return jsonify({"error": "Provide emails array: [{text, label}, ...]"}), 400
+    data = request.get_json(silent=True) or {}
+    test_size = float(data.get("test_size", 0.2))
+    cv_folds = int(data.get("cv_folds", 5))
+
     import pandas as pd
-    df = pd.DataFrame(data["emails"])
-    detector.fit(df, test_size=0.2)
+    train_source = None
+    if "emails" in data:
+        df = pd.DataFrame(data["emails"])
+        train_source = "api_upload"
+    elif _uploaded_df is not None and len(_uploaded_df) > 0:
+        df = _uploaded_df.copy()
+        train_source = "dataset_upload"
+    else:
+        return jsonify({
+            "error": (
+                "No training data available. Upload dataset files to POST /data/upload "
+                "or send JSON body with emails: [{text, label}, ...]."
+            )
+        }), 400
+
+    detector.fit(df, test_size=test_size, cv_folds=cv_folds)
     _trained      = True
-    _model_source = "api_upload"
-    return jsonify({"status": "trained", "best": detector.best_model()})
+    _model_source = train_source
+    n = len(df)
+    ph = int((df["label"] == 1).sum()) if "label" in df.columns else None
+    return jsonify({
+        "status": "trained",
+        "best": detector.best_model(),
+        "model_source": _model_source,
+        "rows": n,
+        "phishing": ph,
+    })
+
+
+@app.route("/train/fallback", methods=["POST"])
+def train_fallback():
+    """Explicitly train using built-in demo fallback emails."""
+    _demo_train()
+    return jsonify({
+        "status": "trained",
+        "best": detector.best_model(),
+        "model_source": _model_source,
+        "warning": "Demo fallback is active. Upload datasets to /train for production training.",
+    })
 
 
 @app.route("/model/save", methods=["POST"])
@@ -337,53 +494,267 @@ def model_save():
 @app.route("/dashboard")
 def dashboard():
     dt_available = "Decision Tree" in detector.trained if _trained else False
-    dt_depth     = (detector.trained["Decision Tree"].get_depth()
-                    if dt_available else "—")
+    dt_depth = (detector.trained["Decision Tree"].get_depth()
+                if dt_available else "-")
     return f"""<!DOCTYPE html>
 <html>
 <head>
-  <title>PhishGuard Dashboard</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PhishGuard Railway Dashboard</title>
   <style>
-    body {{ font-family: 'Segoe UI', sans-serif; background:#1A2332; color:white;
-            text-align:center; padding:60px; }}
-    h1   {{ color:#FF6B2B; }}
-    .badge {{ background:#FF6B2B; padding:4px 12px; border-radius:20px;
-              font-size:13px; margin:4px; display:inline-block; }}
-    .info  {{ background:#243044; border-radius:10px; padding:20px;
-              max-width:480px; margin:20px auto; text-align:left;
-              font-size:13px; line-height:1.7; }}
-    code   {{ color:#FF6B2B; }}
+    :root {{
+      --bg:#0f1b2d;
+      --card:#1c2b42;
+      --card2:#243653;
+      --text:#e8eefc;
+      --muted:#9fb1ce;
+      --accent:#ff6b2b;
+      --line:#344a6a;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      color: var(--text);
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: radial-gradient(1200px 500px at 10% -10%, #253a58 0%, var(--bg) 60%);
+    }}
+    .wrap {{ max-width: 1100px; margin: 0 auto; padding: 28px 18px 40px; }}
+    h1 {{ margin: 0 0 10px; color: var(--accent); }}
+    .sub {{ color: var(--muted); margin-bottom: 16px; }}
+    .chips {{ display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 18px; }}
+    .chip {{
+      background: var(--card2);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 12px;
+    }}
+    .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }}
+    .card {{
+      background: linear-gradient(180deg, #20314c 0%, #1a2a41 100%);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+    }}
+    .card h2 {{ margin: 0 0 10px; font-size: 16px; }}
+    .hint {{ color: var(--muted); font-size: 12px; margin: 0 0 10px; }}
+    input, textarea, button {{
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      font: inherit;
+    }}
+    input, textarea {{ background: #112036; color: var(--text); padding: 10px; }}
+    textarea {{ min-height: 110px; resize: vertical; }}
+    .row {{ display: flex; gap: 8px; margin-top: 8px; }}
+    .row > * {{ flex: 1; }}
+    button {{
+      background: var(--accent);
+      color: white;
+      padding: 10px 12px;
+      cursor: pointer;
+      font-weight: 600;
+    }}
+    button.alt {{ background: #2d4261; }}
+    button.warn {{ background: #7a4d1d; }}
+    pre {{
+      background: #101c2f;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      color: #c7d7ef;
+      overflow: auto;
+      max-height: 220px;
+      font-size: 12px;
+      font-family: Consolas, Menlo, monospace;
+    }}
+    @media (max-width: 920px) {{
+      .grid {{ grid-template-columns: 1fr; }}
+    }}
   </style>
 </head>
 <body>
-  <h1>🛡 PhishGuard API</h1>
-  <div>
-    <span class="badge">{'✅ Trained' if _trained else '⏳ Training…'}</span>
-    <span class="badge">Source: {_model_source}</span>
-    <span class="badge">Best: {detector.best_model() if _trained else '—'}</span>
-    {'<span class="badge">🌳 Decision Tree ✓</span>' if dt_available else ''}
+  <div class="wrap">
+    <h1>PhishGuard Railway Control Panel</h1>
+    <div class="sub">Upload dataset files, train models, and run predictions directly from Railway.</div>
+
+    <div class="chips">
+      <div class="chip" id="chip-trained">{'Trained' if _trained else 'Awaiting Upload'}</div>
+      <div class="chip">Source: <span id="chip-source">{_model_source}</span></div>
+      <div class="chip">Best: <span id="chip-best">{detector.best_model() if _trained else '-'}</span></div>
+      <div class="chip">DT Depth: <span id="chip-depth">{dt_depth}</span></div>
+      <div class="chip">Dataset Rows: <span id="chip-rows">{_upload_info['rows']}</span></div>
+    </div>
+
+    <div class="grid">
+      <section class="card">
+        <h2>1) Load Dataset Files</h2>
+        <p class="hint">Accepted: CSV, XLSX, XLS, JSON, TXT, EML. Upload first, then train.</p>
+        <input id="files" type="file" multiple accept=".csv,.xlsx,.xls,.json,.txt,.eml" />
+        <div class="row">
+          <button onclick="uploadFiles()">Upload Datasets</button>
+          <button class="alt" onclick="clearData()">Clear Uploaded Data</button>
+        </div>
+        <pre id="upload-log">Ready.</pre>
+      </section>
+
+      <section class="card">
+        <h2>2) Train Models</h2>
+        <p class="hint">Preferred: train from uploaded dataset. Fallback: train demo data explicitly.</p>
+        <div class="row">
+          <input id="test-size" type="number" step="0.01" min="0.05" max="0.5" value="0.2" />
+          <input id="cv-folds" type="number" step="1" min="2" max="10" value="5" />
+        </div>
+        <div class="row">
+          <button onclick="trainUploaded()">Train Uploaded Data</button>
+          <button class="warn" onclick="trainFallback()">Train Demo Fallback</button>
+        </div>
+        <pre id="train-log">Waiting for dataset upload.</pre>
+      </section>
+
+      <section class="card">
+        <h2>3) Quick Prediction</h2>
+        <p class="hint">Use after training to verify end-to-end behavior.</p>
+        <textarea id="predict-text" placeholder="Paste an email here..."></textarea>
+        <div class="row">
+          <button onclick="predictOne()">Run Prediction</button>
+          <button class="alt" onclick="refreshStatus()">Refresh Status</button>
+        </div>
+        <pre id="predict-log">No prediction yet.</pre>
+      </section>
+
+      <section class="card">
+        <h2>System Status</h2>
+        <p class="hint">Live health and dataset status from API endpoints.</p>
+        <pre id="status-log">Loading...</pre>
+      </section>
+    </div>
   </div>
-  <div class="info">
-    <b>Available models:</b><br>
-    {'<br>'.join(f'• {k}' for k in detector.trained) if _trained else '—'}
-    <br><br>
-    <b>Decision Tree depth:</b> {dt_depth} levels<br>
-    <b>XAI endpoints:</b><br>
-    • <code>POST /explain/tree</code> — exact decision path<br>
-    • <code>POST /explain/shap</code> — SHAP attributions<br>
-    • <code>POST /explain/lime</code> — LIME explanation<br>
-    • <code>GET  /explain/tree/global</code> — top-level rules<br>
-    <br>
-    Launch <code>python app.py</code> for the full desktop dashboard.
-  </div>
+
+  <script>
+    async function apiGet(url) {{
+      const r = await fetch(url);
+      const t = await r.text();
+      let j = {{}};
+      try {{ j = JSON.parse(t); }} catch (e) {{ j = {{ raw: t }}; }}
+      if (!r.ok) throw new Error(JSON.stringify(j));
+      return j;
+    }}
+
+    async function apiPost(url, body, isForm) {{
+      const init = {{ method: "POST" }};
+      if (isForm) {{
+        init.body = body;
+      }} else {{
+        init.headers = {{ "Content-Type": "application/json" }};
+        init.body = JSON.stringify(body || {{}});
+      }}
+      const r = await fetch(url, init);
+      const t = await r.text();
+      let j = {{}};
+      try {{ j = JSON.parse(t); }} catch (e) {{ j = {{ raw: t }}; }}
+      if (!r.ok) throw new Error(JSON.stringify(j));
+      return j;
+    }}
+
+    function put(id, data) {{
+      const el = document.getElementById(id);
+      el.textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+    }}
+
+    async function refreshStatus() {{
+      try {{
+        const [health, data] = await Promise.all([apiGet('/health'), apiGet('/data/status')]);
+        put('status-log', {{ health, data }});
+        document.getElementById('chip-trained').textContent = health.trained ? 'Trained' : 'Awaiting Upload';
+        document.getElementById('chip-source').textContent = health.model_source;
+        document.getElementById('chip-best').textContent = health.best_model || '-';
+        document.getElementById('chip-rows').textContent = data.rows || 0;
+      }} catch (e) {{
+        put('status-log', 'Status error: ' + e.message);
+      }}
+    }}
+
+    async function uploadFiles() {{
+      const input = document.getElementById('files');
+      if (!input.files || input.files.length === 0) {{
+        put('upload-log', 'Select one or more files first.');
+        return;
+      }}
+      const fd = new FormData();
+      for (const f of input.files) fd.append('files', f);
+      put('upload-log', 'Uploading...');
+      try {{
+        const out = await apiPost('/data/upload', fd, true);
+        put('upload-log', out);
+        await refreshStatus();
+      }} catch (e) {{
+        put('upload-log', 'Upload failed: ' + e.message);
+      }}
+    }}
+
+    async function clearData() {{
+      put('upload-log', 'Clearing...');
+      try {{
+        const out = await apiPost('/data/clear', {{}}, false);
+        put('upload-log', out);
+        await refreshStatus();
+      }} catch (e) {{
+        put('upload-log', 'Clear failed: ' + e.message);
+      }}
+    }}
+
+    async function trainUploaded() {{
+      const testSize = parseFloat(document.getElementById('test-size').value || '0.2');
+      const cvFolds = parseInt(document.getElementById('cv-folds').value || '5', 10);
+      put('train-log', 'Training from uploaded dataset...');
+      try {{
+        const out = await apiPost('/train', {{ test_size: testSize, cv_folds: cvFolds }}, false);
+        put('train-log', out);
+        await refreshStatus();
+      }} catch (e) {{
+        put('train-log', 'Train failed: ' + e.message);
+      }}
+    }}
+
+    async function trainFallback() {{
+      put('train-log', 'Training demo fallback...');
+      try {{
+        const out = await apiPost('/train/fallback', {{}}, false);
+        put('train-log', out);
+        await refreshStatus();
+      }} catch (e) {{
+        put('train-log', 'Fallback failed: ' + e.message);
+      }}
+    }}
+
+    async function predictOne() {{
+      const text = document.getElementById('predict-text').value.trim();
+      if (!text) {{
+        put('predict-log', 'Paste email text first.');
+        return;
+      }}
+      put('predict-log', 'Predicting...');
+      try {{
+        const out = await apiPost('/predict', {{ text }}, false);
+        put('predict-log', out);
+      }} catch (e) {{
+        put('predict-log', 'Predict failed: ' + e.message);
+      }}
+    }}
+
+    refreshStatus();
+    setInterval(refreshStatus, 15000);
+  </script>
 </body>
 </html>"""
 
-
 if __name__ == "__main__":
     print("=" * 55)
-    print("  PhishGuard API Server — B01821745 | UWS MSc IT")
+    print("  PhishGuard API Server â€” B01821745 | UWS MSc IT")
     print("  http://localhost:5000")
     print("  Decision Tree XAI: /explain/tree")
     print("=" * 55)
     app.run(host="0.0.0.0", port=5000, debug=False)
+

@@ -9,6 +9,12 @@ chrome.runtime.onInstalled.addListener(() => {
 
 // Keep service worker alive for message passing
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.action === "openDashboard" && msg.url) {
+    chrome.tabs.create({ url: msg.url });
+    sendResponse({ status: "opened" });
+    return false;
+  }
+
   // Forward any background-level messages if needed in future
   return true;
 });

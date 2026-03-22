@@ -42,7 +42,17 @@ document.getElementById("auto-toggle").addEventListener("change", (e) => {
 document.getElementById("analyse-btn").addEventListener("click", () => {
   document.getElementById("status-msg").textContent = "Sending to PhishGuard…";
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (!tabs[0]?.id) {
+      document.getElementById("status-msg").textContent = "No active tab found.";
+      return;
+    }
+
     chrome.tabs.sendMessage(tabs[0].id, { action: "analyse" }, (resp) => {
+      if (chrome.runtime.lastError) {
+        document.getElementById("status-msg").textContent = "Reload Gmail tab and try again.";
+        return;
+      }
+
       document.getElementById("status-msg").textContent =
         resp?.status === "analysing" ? "Analysing… check the email panel" : "Done";
       setTimeout(window.close, 1200);
