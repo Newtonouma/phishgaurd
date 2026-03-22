@@ -160,7 +160,7 @@ function showPanel(options) {
     panel.innerHTML = `
       <div class="pg-panel-header">
         <span class="pg-logo">🛡 PhishGuard</span>
-        <button class="pg-close" onclick="this.closest('#phishguard-panel').remove()">✕</button>
+        <button class="pg-close" data-action="close-panel">✕</button>
       </div>
       <div class="pg-loading">
         <div class="pg-spinner"></div>
@@ -171,7 +171,7 @@ function showPanel(options) {
     panel.innerHTML = `
       <div class="pg-panel-header">
         <span class="pg-logo">🛡 PhishGuard</span>
-        <button class="pg-close" onclick="this.closest('#phishguard-panel').remove()">✕</button>
+        <button class="pg-close" data-action="close-panel">✕</button>
       </div>
       <div class="pg-error">${options.error}</div>
     `;
@@ -198,7 +198,7 @@ function showPanel(options) {
       <div class="pg-panel-header">
         <span class="pg-logo">🛡 PhishGuard</span>
         <span class="pg-badge" style="background:${colour}">${emoji} ${r.label}</span>
-        <button class="pg-close" onclick="this.closest('#phishguard-panel').remove()">✕</button>
+        <button class="pg-close" data-action="close-panel">✕</button>
       </div>
       ${options.subject ? `<div class="pg-subject">${options.subject}</div>` : ""}
       <div class="pg-confidence" style="color:${colour}">
@@ -211,15 +211,29 @@ function showPanel(options) {
           : "Analysis complete."
       }</div>
       <div class="pg-actions">
-        <button class="pg-btn pg-btn-primary" onclick="window.open('https://phishgaurd-production-1c76.up.railway.app/dashboard','_blank')">
+        <button class="pg-btn pg-btn-primary" data-action="open-dashboard">
           📊 Full Dashboard
         </button>
-        <button class="pg-btn pg-btn-secondary" onclick="this.closest('#phishguard-panel').remove()">
+        <button class="pg-btn pg-btn-secondary" data-action="close-panel">
           Dismiss
         </button>
       </div>
       <div class="pg-footer">B01821745 | UWS MSc IT with Data Analytics</div>
     `;
+  }
+
+  // Gmail CSP can block inline onclick handlers; bind actions programmatically.
+  panel.querySelectorAll('[data-action="close-panel"]').forEach((btn) => {
+    btn.addEventListener("click", () => {
+      panel.remove();
+    });
+  });
+
+  const dashboardBtn = panel.querySelector('[data-action="open-dashboard"]');
+  if (dashboardBtn) {
+    dashboardBtn.addEventListener("click", () => {
+      window.open(`${API_BASE}/dashboard`, "_blank", "noopener");
+    });
   }
 
   // Insert after email header or at top of email view
