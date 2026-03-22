@@ -9,6 +9,8 @@ Included files
 - phishing_pipeline.py: ML pipeline used by the API
 - requirements.txt: Python dependencies for Railway
 - Procfile: Railway start command (Gunicorn)
+- .python-version: pins Python runtime to 3.12
+- nixpacks.toml: Railway/Nixpacks runtime pin
 
 Optional model files (for real trained predictions)
 ----------------------------------------------------
@@ -34,3 +36,4 @@ Notes
 -----
 - This folder is Linux-compatible (no pywin32 dependency).
 - Use HTTPS Railway URL in extension content.js and popup.js.
+- If Railway fails with "mise ... python@... 404", re-check that Root Directory is set to railway_api so these runtime pin files are used.
