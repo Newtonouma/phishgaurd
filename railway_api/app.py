@@ -36,6 +36,7 @@ UWS MSc IT with Data Analytics | B01821745
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 import os, sys, threading, logging, tempfile
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
@@ -47,6 +48,8 @@ from phishing_pipeline import (PhishingDetector, PhishingDataLoader,
 
 app = Flask(__name__)
 CORS(app)   # Allow extension to call from mail.google.com
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "350"))
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 
 # â”€â”€ Global state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 detector = PhishingDetector(max_features=10000)
@@ -201,6 +204,13 @@ def _clear_uploaded_dataset():
     }
 
 
+@app.errorhandler(RequestEntityTooLarge)
+def handle_large_upload(_err):
+    return jsonify({
+        "error": f"Upload too large. Max allowed size is {MAX_UPLOAD_MB} MB."
+    }), 413
+
+
 # â”€â”€ Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.route("/health")
@@ -228,6 +238,12 @@ def data_upload():
     Upload one or more dataset files and keep merged data in memory.
     Accepted extensions: CSV, XLSX, XLS, JSON, TXT, EML.
     """
+    content_len = request.content_length or 0
+    if content_len:
+        logging.info(f"/data/upload request size: {content_len / (1024 * 1024):.2f} MB")
+    if content_len and content_len > app.config["MAX_CONTENT_LENGTH"]:
+        raise RequestEntityTooLarge()
+
     files = request.files.getlist("files")
     if not files:
         one = request.files.get("file")

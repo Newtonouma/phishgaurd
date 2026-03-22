@@ -50,3 +50,5 @@ Notes
 - This folder is Linux-compatible (no pywin32 dependency).
 - Use HTTPS Railway URL in extension content.js and popup.js.
 - If Railway fails with "mise ... python@... 404", re-check that Root Directory is set to railway_api so these runtime pin files are used.
+- This service is configured for long uploads/training (`gunicorn --timeout 1200`).
+- Adjust upload cap with env var `MAX_UPLOAD_MB` (default `350`).
