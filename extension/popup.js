@@ -5,7 +5,7 @@ const API = "https://phishgaurd-production-1c76.up.railway.app";
 // Check API status
 async function checkAPI() {
   try {
-    const r = await fetch(`${API}/health`, { signal: AbortSignal.timeout(2000) });
+    const r = await fetch(`${API}/health`, { signal: AbortSignal.timeout(8000) });
     const d = await r.json();
     document.getElementById("api-status").innerHTML =
       `<span class="dot dot-green"></span>Online — ${d.trained ? "Trained ✅" : "Not trained"}`;

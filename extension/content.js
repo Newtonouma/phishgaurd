@@ -91,12 +91,26 @@ async function analyseCurrentEmail() {
       body: JSON.stringify({ text: email.full }),
     });
 
-    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    if (!response.ok) {
+      let serverMsg = `API returned ${response.status}`;
+      try {
+        const errBody = await response.json();
+        if (errBody?.error) serverMsg = errBody.error;
+      } catch (_) {
+        // Keep default serverMsg when body is not JSON.
+      }
+
+      showPanel({
+        error: `PhishGuard API is reachable but could not analyse this email right now. ${serverMsg}`,
+      });
+      return;
+    }
+
     const result = await response.json();
     showPanel({ result, subject: email.subject, sender: email.sender });
 
   } catch (err) {
-    // Offline fallback: rule-based client-side detection
+    // Network failure/offline fallback: rule-based client-side detection
     const fallback = offlineFallback(email.full);
     showPanel({ result: fallback, subject: email.subject, offline: true });
   }
